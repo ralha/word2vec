@@ -114,16 +114,27 @@ def basic_clean(text: str, lower: bool = False) -> str:
         text = text.lower()
     return text.strip()
 
-def split_sentences(text: str) -> List[str]:
-    # Heuristic splitter—good enough for training Word2Vec
-    # Ensure all sentence boundaries have spacing
-    text = re.sub(r"([.!?])([A-Za-z])", r"\1 \2", text)
-    sents = re.split(RE_SENT_SPLIT, text)
-    sents = [s.strip() for s in sents if s and len(s.strip()) > 1]
-    return sents
+def basic_clean(text: str, lower: bool = False) -> str:
+    text = normalize_unicode(text)
+    # 1. Standardize quotes/dashes
+    text = text.replace("“", '"').replace("”", '"').replace("’", "'").replace("‘", "'")
+    
+    # 2. ADD THIS: Pad punctuation with spaces 
+    # This turns "king," into "king ," so they aren't glued together
+    text = re.sub(r"([.,!?();:])", r" \1 ", text)
+    
+    text = RE_MULTISPACE.sub(" ", text)
+    if lower:
+        text = text.lower()
+    return text.strip()
 
+import nltk
+nltk.download('punkt_tab')
+
+def split_sentences(text: str) -> List[str]:
+    return nltk.sent_tokenize(text)
 def tokenize(text: str) -> List[str]:
-    return RE_TOKENS.findall(text)
+    return RE_TOKENS.findall(text.lower())
 
 def is_mostly_english(text: str, threshold: float = 0.7) -> bool:
     # Crude language check: ratio of ASCII letters/punctuation to all chars
