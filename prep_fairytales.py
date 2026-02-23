@@ -29,6 +29,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Tuple, Dict, Optional
+import string 
 
 try:
     import requests
@@ -86,42 +87,41 @@ def normalize_unicode(text: str) -> str:
 
 def strip_gutenberg_boilerplate(text: str) -> str:
     """
-    Remove Project Gutenberg headers/footers if present.
-    We scan for START/END sentinels and keep content between them; otherwise return as-is.
+    Enhanced removal of Project Gutenberg headers/footers.
+    Uses your existing regex logic but adds a 'greedy' search for markers.
     """
     lines = text.splitlines()
-    start_idx, end_idx = None, None
-    for i, ln in enumerate(lines):
-        if start_idx is None and GUT_START.search(ln):
+    start_idx = 0
+    end_idx = len(lines)
+
+    # 1. Search for START sentinel
+    for i, line in enumerate(lines[:1000]): # Usually in the first 1000 lines
+        if GUT_START.search(line):
             start_idx = i + 1
-        if GUT_END.search(ln):
+            break
+            
+    # 2. Search for END sentinel (searching backwards is faster)
+    for i in range(len(lines) - 1, len(lines) - 2000, -1):
+        if GUT_END.search(lines[i]):
             end_idx = i
             break
-    if start_idx is not None and end_idx is not None and start_idx < end_idx:
-        body = "\n".join(lines[start_idx:end_idx])
-    else:
-        body = text
-    return body
 
-def basic_clean(text: str, lower: bool = False) -> str:
-    # De-dup whitespace, normalize quotes/dashes a bit
-    text = normalize_unicode(text)
-    # Replace fancy quotes/dashes with simple equivalents
-    text = text.replace("“", '"').replace("”", '"').replace("’", "'").replace("‘", "'").replace("–", "-").replace("—", "-")
-    text = RE_MULTISPACE.sub(" ", text)
-    text = re.sub(r"\s*\n\s*", "\n", text)
-    if lower:
-        text = text.lower()
-    return text.strip()
+    # 3. Final clean: join and strip any leading/trailing whitespace
+    body = "\n".join(lines[start_idx:end_idx]).strip()
+    return body
 
 def basic_clean(text: str, lower: bool = False) -> str:
     text = normalize_unicode(text)
     # 1. Standardize quotes/dashes
+    # Standardize all fancy quotes to simple ones
     text = text.replace("“", '"').replace("”", '"').replace("’", "'").replace("‘", "'")
     
     # 2. ADD THIS: Pad punctuation with spaces 
     # This turns "king," into "king ," so they aren't glued together
     text = re.sub(r"([.,!?();:])", r" \1 ", text)
+    text = re.sub(r"'s\b", "", text)  # Removes 's at the end of words
+    text = text.replace("'", "")      # Removes any remaining single quotes
+    text = text.replace('"', "")      # Removes double quotes
     
     text = RE_MULTISPACE.sub(" ", text)
     if lower:
@@ -133,8 +133,17 @@ nltk.download('punkt_tab')
 
 def split_sentences(text: str) -> List[str]:
     return nltk.sent_tokenize(text)
+
 def tokenize(text: str) -> List[str]:
-    return RE_TOKENS.findall(text.lower())
+    # 1. Use your existing regex to find word-like chunks
+    raw_tokens = RE_TOKENS.findall(text.lower())
+    
+    # 2. Clean each token: strip any remaining punctuation from the edges
+    # This handles cases like '"well' or 'end."'
+    cleaned_tokens = [t.strip(string.punctuation) for t in raw_tokens]
+    
+    # 3. Filter out empty strings or single-character punctuation that slipped through
+    return [t for t in cleaned_tokens if t and len(t) > 1]
 
 def is_mostly_english(text: str, threshold: float = 0.7) -> bool:
     # Crude language check: ratio of ASCII letters/punctuation to all chars

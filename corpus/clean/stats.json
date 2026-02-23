@@ -1,7 +1,7 @@
 {
-  "stories": 1,
-  "tokens": 61062,
-  "vocab": 5640,
+  "stories": 6,
+  "tokens": 792983,
+  "vocab": 19122,
   "removed_non_english": 0,
-  "generated_at": "2026-02-19T13:58:41.152266Z"
+  "generated_at": "2026-02-23T15:56:10.509072Z"
 }
