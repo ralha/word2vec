@@ -91,7 +91,7 @@ class Word2VecEngine:
         # Pre-generate table for O(1) lookup
         return np.random.choice(len(self.word2idx), size=table_size, p=probs)
     
-    def train(self, corpus_type, model, tokenized_corpus, neg_table, window_size=5, epochs=50, batch_size=1024,num_negatives=10):
+    def train(self, corpus_type, model, tokenized_corpus, neg_table, window_size=5, epochs=50, batch_size=1024,num_negatives=10,val_split=0.1,patience=5):
         optimizer = optim.Adam(model.parameters(), lr=0.002)
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
         
@@ -107,16 +107,26 @@ class Word2VecEngine:
                     if context_idx != center_idx:
                         pairs.append((center_word, indices[context_idx]))
 
-        # 2. Training Loop
-        table_ptr = 0
+        # 2. Split into Train and Validation
+        random.shuffle(pairs)
+        split_idx = int(len(pairs) * (1 - val_split))
+        train_pairs = pairs[:split_idx]
+        val_pairs = pairs[split_idx:]
+        print(f"Total pairs: {len(pairs)} | Train: {len(train_pairs)} | Val: {len(val_pairs)}")
 
-        epoch_loss = []
+        # 3. Training Loop
+        train_losses = []
+        val_losses = []
+        table_ptr = 0
+        best_val_loss = float('inf')
         print("--- Trainning ---")
         for epoch in range(epochs):
+
+            # ---- TRAINING PHASE ---
             random.shuffle(pairs)
-            total_loss = 0
-            for i in range(0, len(pairs), batch_size):
-                batch = pairs[i:i+batch_size]
+            total_train_loss = 0
+            for i in range(0, len(train_pairs), batch_size):
+                batch = train_pairs[i:i+batch_size]
                 if len(batch) < batch_size: continue
 
                 centers = torch.LongTensor([c for c, p in batch])
@@ -134,14 +144,52 @@ class Word2VecEngine:
                 loss = model(centers, positives, negatives)
                 loss.backward()
                 optimizer.step()
-                total_loss += loss.item()
+                total_train_loss += loss.item()
 
+            # --- VALIDATION PHASE ---
+            model.eval()
+            total_val_loss = 0
+            with torch.no_grad():
+                for i in range(0, len(val_pairs), batch_size):
+                    batch = val_pairs[i:i+batch_size]
+                    if len(batch) < batch_size: continue
+                    
+                    centers = torch.LongTensor([c for c, p in batch])
+                    positives = torch.LongTensor([p for c, p in batch])
+                    
+                    # Use same negative sampling logic for consistency
+                    if table_ptr + (batch_size * 10) > len(neg_table): table_ptr = 0
+                    neg_indices = neg_table[table_ptr:table_ptr + (batch_size * 10)]
+                    negatives = torch.LongTensor(neg_indices).view(batch_size, 10)
+                    table_ptr += (batch_size * 10)
+
+                    loss = model(centers, positives, negatives)
+                    total_val_loss += loss.item()
+
+            avg_train = total_train_loss / (len(train_pairs) / batch_size)
+            avg_val = total_val_loss / (len(val_pairs) / batch_size)
+        
             scheduler.step()
-            if (epoch + 1) % 10 == 0:
-                print(f"Epoch {epoch+1}, Loss: {total_loss/len(pairs):.6f}, LR: {scheduler.get_last_lr()[0]:.5f}")
-            epoch_loss.append(total_loss)
+
+            # --- EARLY STOPPING LOGIC ---
+            if avg_val < best_val_loss:
+                best_val_loss = avg_val
+                early_stop_counter = 0
+            else:
+                early_stop_counter += 1
+                print(f"--> No improvement. Patience: {early_stop_counter}/{patience}")
+
+            if early_stop_counter >= patience:
+                print(f"!!! Early Stopping triggered at epoch {epoch+1} !!!")
+                break
+
+            print(f"Epoch {epoch+1}/{epochs} | Train Loss: {avg_train:.4f} | Val Loss: {avg_val:.4f}")
+            train_losses.append(avg_train)
+            val_losses.append(avg_val)
+
+        
         torch.save(model, f"word2vect_{corpus_type}.pt")
-        return epoch_loss
+        return train_losses,val_losses
     
     def find_similar_words(self, model, word, top_n=5):
         if word not in self.word2idx:
